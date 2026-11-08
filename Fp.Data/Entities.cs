@@ -40,6 +40,14 @@ public abstract class AuditableEntity<TKey> : Entity<TKey>, IAuditable
 public abstract class AuditableEntity : AuditableEntity<long>;
 
 /// <summary>
+/// Optimistic concurrency. Call <see cref="ModelBuilderExtensions.ApplyRowVersion"/> to activate it.
+/// </summary>
+public interface IVersioned
+{
+    byte[] RowVersion { get; set; }
+}
+
+/// <summary>
 /// Deleting an entity with this interface marks it as deleted instead of removing the row.
 /// Call <see cref="ModelBuilderExtensions.ApplySoftDeleteFilter"/> to hide deleted rows from queries.
 /// </summary>

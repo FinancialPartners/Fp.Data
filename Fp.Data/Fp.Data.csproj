@@ -13,8 +13,8 @@
     <Authors>Financial Partners</Authors>
     <Company>Financial Partners</Company>
     <Copyright>Copyright (c) Financial Partners</Copyright>
-    <Description>Building blocks for Entity Framework Core: base entities, automatic auditing and soft delete through interceptors, and a thin optional repository with paging.</Description>
-    <PackageTags>entity-framework-core;efcore;audit;soft-delete;repository;unit-of-work</PackageTags>
+    <Description>Building blocks for Entity Framework Core: base entities,     automatic auditing and soft delete through interceptors, optimistic concurrency, paging and model conventions.</Description>
+        <PackageTags>entity-framework-core;efcore;audit;soft-delete;concurrency;paging</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/FinancialPartners/Fp.Data</PackageProjectUrl>

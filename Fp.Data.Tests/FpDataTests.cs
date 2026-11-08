@@ -8,16 +8,28 @@ namespace Fp.Data.Tests;
 public class Customer : AuditableEntity, ISoftDelete
 {
     public string Name { get; set; } = "";
+    public decimal Balance { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset? DeletedOn { get; set; }
     public string? DeletedBy { get; set; }
 }
 
+// SQLite does not generate row versions, so this entity is only used to verify the model.
+public class Invoice : Entity, IVersioned
+{
+    public byte[] RowVersion { get; set; } = [];
+}
+
 public class TestContext(DbContextOptions<TestContext> options) : DbContext(options)
 {
     public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder) => modelBuilder.ApplySoftDeleteFilter();
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder) =>
+        configurationBuilder.ConfigureFpConventions();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+        modelBuilder.ApplyRowVersion().ApplySoftDeleteFilter();
 }
 
 public class TestUser : ICurrentUser
@@ -38,7 +50,7 @@ public sealed class Fixture : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(Time);
         services.AddSingleton<ICurrentUser>(User);
-        services.AddFpData<TestContext>();
+        services.AddFpData();
         services.AddDbContext<TestContext>((sp, o) => o.UseSqlite(_connection).UseFpData(sp));
         Provider = services.BuildServiceProvider();
         using var scope = Provider.CreateScope();
@@ -124,16 +136,14 @@ public class FpDataTests : IDisposable
         var (scope, ctx) = NewScope();
         using (scope)
         {
-            var repo = scope.ServiceProvider.GetRequiredService<IRepository<Customer>>();
-            var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
             var c = new Customer { Name = "A" };
-            repo.Add(c);
-            await uow.SaveChangesAsync();
+            ctx.Customers.Add(c);
+            await ctx.SaveChangesAsync();
 
-            repo.Remove(c);
-            await uow.SaveChangesAsync();
+            ctx.Customers.Remove(c);
+            await ctx.SaveChangesAsync();
 
-            Assert.Empty(await repo.ListAsync());
+            Assert.Empty(await ctx.Customers.ToListAsync());
             var all = await ctx.Customers.IgnoreQueryFilters().AsNoTracking().SingleAsync();
             Assert.True(all.IsDeleted);
             Assert.Equal("joost", all.DeletedBy);
@@ -142,36 +152,29 @@ public class FpDataTests : IDisposable
     }
 
     [Fact]
-    public async Task Repository_FindListAny()
+    public void Model_HasRowVersionAndConventions()
     {
-        var (scope, _) = NewScope();
+        var (scope, ctx) = NewScope();
         using (scope)
         {
-            var repo = scope.ServiceProvider.GetRequiredService<IRepository<Customer>>();
-            var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-            repo.AddRange([new Customer { Name = "A" }, new Customer { Name = "B" }]);
-            await uow.SaveChangesAsync();
-
-            Assert.NotNull(await repo.FindAsync(1L));
-            Assert.Null(await repo.FindAsync(99L));
-            Assert.Single(await repo.ListAsync(x => x.Name == "A"));
-            Assert.True(await repo.AnyAsync(x => x.Name == "B"));
-            Assert.False(await repo.AnyAsync(x => x.Name == "Z"));
+            Assert.True(ctx.Model.FindEntityType(typeof(Invoice))!.FindProperty(nameof(Invoice.RowVersion))!.IsConcurrencyToken);
+            var type = ctx.Model.FindEntityType(typeof(Customer))!;
+            Assert.Equal(18, type.FindProperty(nameof(Customer.Balance))!.GetPrecision());
+            Assert.Equal(2, type.FindProperty(nameof(Customer.Balance))!.GetScale());
+            Assert.Equal(256, type.FindProperty(nameof(Customer.Name))!.GetMaxLength());
         }
     }
 
     [Fact]
-    public async Task Paging_Works()
+    public async Task ToPaged_Works()
     {
-        var (scope, _) = NewScope();
+        var (scope, ctx) = NewScope();
         using (scope)
         {
-            var repo = scope.ServiceProvider.GetRequiredService<IRepository<Customer>>();
-            var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-            repo.AddRange(Enumerable.Range(1, 25).Select(i => new Customer { Name = $"C{i:00}" }));
-            await uow.SaveChangesAsync();
+            ctx.Customers.AddRange(Enumerable.Range(1, 25).Select(i => new Customer { Name = $"C{i:00}" }));
+            await ctx.SaveChangesAsync();
 
-            var page = await repo.PagedAsync(3, 10, q => q.OrderBy(x => x.Name));
+            var page = await ctx.Customers.OrderBy(x => x.Name).ToPagedAsync(3, 10);
             Assert.Equal(5, page.Items.Count);
             Assert.Equal(25, page.TotalCount);
             Assert.Equal(3, page.TotalPages);
@@ -185,13 +188,12 @@ public class FpDataTests : IDisposable
     [InlineData(0, 10)]
     [InlineData(1, 0)]
     [InlineData(1, 1001)]
-    public async Task Paging_InvalidArguments_Throw(int page, int size)
+    public async Task ToPaged_InvalidArguments_Throw(int page, int size)
     {
-        var (scope, _) = NewScope();
+        var (scope, ctx) = NewScope();
         using (scope)
         {
-            var repo = scope.ServiceProvider.GetRequiredService<IRepository<Customer>>();
-            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => repo.PagedAsync(page, size, q => q.OrderBy(x => x.Id)));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ctx.Customers.OrderBy(x => x.Id).ToPagedAsync(page, size));
         }
     }
 }
