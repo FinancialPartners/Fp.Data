@@ -5,13 +5,29 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Fp.Data.Tests;
 
+[Auditable]
 public class Customer : AuditableEntity, ISoftDelete
 {
     public string Name { get; set; } = "";
+    public string? Notes { get; set; }
+    [AuditIgnore] public string? Secret { get; set; }
     public decimal Balance { get; set; }
     public bool IsDeleted { get; set; }
     public DateTimeOffset? DeletedOn { get; set; }
     public string? DeletedBy { get; set; }
+}
+
+[Auditable]
+public class OrderLine
+{
+    public string OrderNo { get; set; } = "";
+    public int LineNo { get; set; }
+    public int Quantity { get; set; }
+}
+
+public class Tag : Entity
+{
+    public string Name { get; set; } = "";
 }
 
 // SQLite does not generate row versions, so this entity is only used to verify the model.
@@ -24,12 +40,17 @@ public class TestContext(DbContextOptions<TestContext> options) : DbContext(opti
 {
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<OrderLine> OrderLines => Set<OrderLine>();
+    public DbSet<Tag> Tags => Set<Tag>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder) =>
         configurationBuilder.ConfigureFpConventions();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
-        modelBuilder.ApplyRowVersion().ApplySoftDeleteFilter();
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OrderLine>().HasKey(l => new { l.OrderNo, l.LineNo });
+        modelBuilder.ApplyRowVersion().ApplySoftDeleteFilter().ApplyAuditLog();
+    }
 }
 
 public class TestUser : ICurrentUser
@@ -37,11 +58,19 @@ public class TestUser : ICurrentUser
     public string? UserId { get; set; }
 }
 
+public class TestAuditContext : IAuditContext
+{
+    public string? CorrelationId { get; set; }
+    public string? OriginIp { get; set; }
+    public string? RequestUri { get; set; }
+}
+
 public sealed class Fixture : IDisposable
 {
     private readonly SqliteConnection _connection = new("DataSource=:memory:");
     public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2025, 1, 1, 12, 0, 0, TimeSpan.Zero));
     public TestUser User { get; } = new();
+    public TestAuditContext Audit { get; } = new();
     public ServiceProvider Provider { get; }
 
     public Fixture()
@@ -50,8 +79,9 @@ public sealed class Fixture : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(Time);
         services.AddSingleton<ICurrentUser>(User);
-        services.AddFpData();
-        services.AddDbContext<TestContext>((sp, o) => o.UseSqlite(_connection).UseFpData(sp));
+        services.AddSingleton<IAuditContext>(Audit);
+        services.AddFpAuditLog();
+        services.AddDbContext<TestContext>((sp, o) => o.UseSqlite(_connection).UseFpData(sp).UseFpAuditLog(sp));
         Provider = services.BuildServiceProvider();
         using var scope = Provider.CreateScope();
         scope.ServiceProvider.GetRequiredService<TestContext>().Database.EnsureCreated();
